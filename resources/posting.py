@@ -143,8 +143,6 @@ class PostingListResource(Resource) :
         return {'result' : 'success'}, 200
     
 
-
-
     def detect_labels(self, photo, bucket):
 
         client = boto3.client('rekognition',
@@ -173,3 +171,132 @@ class PostingListResource(Resource) :
             
 
         return label_list
+
+    @jwt_required()
+    def get(self) :
+
+        user_id = get_jwt_identity()
+
+        offset = request.args.get('offset')
+        limit = request.args.get('limit')
+
+        try :
+            connection = get_connection()
+            query = '''select p.id postId, p.imgUrl, p.content,
+                            u.id userId, u.email, 
+                            p.createdAt, 
+                            count(l.id) as likeCnt, 
+                            if(l2.id is null, 0, 1) as isLike
+                    from follow f 
+                    join posting p 
+                    on f.followeeId = p.userId
+                    join user u 
+                    on p.userId = u.id
+                    left join `like` l
+                    on p.id = l.postingId
+                    left join `like` l2
+                    on p.id = l2.postingId and l2.userId = %s
+                    where f.followerId = %s
+                    group by p.id
+                    order by p.createdAt desc
+                    limit '''+offset+''', '''+limit+''';'''
+            
+            record = (user_id, user_id)
+
+            cursor = connection.cursor(dictionary=True)  
+            cursor.execute(query, record)
+
+            result_list = cursor.fetchall()
+
+            cursor.close()
+            connection.close()
+
+        except Error as e:
+            print(e)
+            cursor.close()
+            connection.close()
+            return {'error' : str(e)}, 500
+        
+        print(result_list)
+
+        i = 0
+        for row in result_list :
+            result_list[i]['createdAt'] = row['createdAt'].isoformat()
+            i = i + 1
+
+        return {'result' : 'success',
+                'items' : result_list,
+                'count' : len(result_list)}
+
+
+class PostingResource(Resource) :
+
+    @jwt_required()
+    def get(self, posting_id) :
+
+        user_id = get_jwt_identity()
+
+        try :
+            connection = get_connection()
+            query = '''select p.id as postId, p.imgUrl, p.content,
+                            u.id as userId, u.email, p.createdAt,
+                            count(l.id) as likeCnt,
+                            if( l2.id is null, 0, 1) as isLike
+                        from posting p
+                        join user u
+                        on p.userId = u.id
+                        left join `like` l
+                        on p.id = l.postingId
+                        left join `like` l2
+                        on p.id = l2.postingId and l2.userId = %s
+                        where p.id = %s;'''
+            record = (user_id, posting_id)
+
+            cursor = connection.cursor(dictionary=True)
+            cursor.execute(query, record)
+            result_list = cursor.fetchall()
+
+            if len(result_list) == 0 :
+                return {'error' : '데이터 없음'}, 400 
+            
+            print(result_list)
+            # 데이터 변수 작업.
+            post = result_list[0]
+
+
+            query = '''select concat( '#' , name ) as tag
+                    from tag t
+                    join tag_name tn
+                    on t.tagNameId = tn.id
+                    where t.postingId = %s;'''
+            record = (posting_id, )
+            cursor = connection.cursor(dictionary=True)
+            cursor.execute(query, record)
+            result_list = cursor.fetchall()
+
+            print(result_list)
+
+            tag = []
+            for tag_dict in result_list:
+                tag.append( tag_dict['tag'] )
+
+            cursor.close()
+            connection.close()
+
+        except Error as e:
+            print(e)
+            cursor.close()
+            connection.close()
+            return {'error' : str(e)},500
+
+        print()
+        print(post)
+        print()
+        print(tag)
+
+        post['createdAt'] = post['createdAt'].isoformat()
+
+        return {'result' : 'success',
+                'post' : post,
+                'tag' : tag }
+
